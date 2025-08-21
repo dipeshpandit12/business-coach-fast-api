@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.env.*
+.DS_Store
+# VSCode
+.vscode/
+# OS
+Thumbs.db
+# Langchain
+langchain.db
