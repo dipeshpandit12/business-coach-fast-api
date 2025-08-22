@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import certifi
+from bson.objectid import ObjectId
 
 load_dotenv()
 
@@ -60,6 +61,7 @@ mongo_client = MongoClient(
 mongo_db_name = _select_db_name_from_uri(MONGODB_URI)
 mongo_db = mongo_client[mongo_db_name]
 collection = mongo_db["chathistorysessions"]
+reg_collection = mongo_db["registration_responses"]
 
 
 @app.on_event("startup")
@@ -244,14 +246,20 @@ async def megachat_post(request: Request):
         print("[FastAPI] user_name:", user_name)
         print("[FastAPI] user_id:", user_id)
 
+        # Fetch user's business info from registration_responses
+        business_doc = _get_business_info(user_email, user_id)
+        business_profile = _format_business_profile(business_doc) if business_doc else ""
+
         # Build personalized prompt using LangChain
         history_str = "\n".join([
             f"{'User' if m.get('type') == 'user' else 'AI'}: {m.get('content', '')}" for m in chat_history
         ])
+        profile_block = f"\nBusiness Profile:\n{business_profile}" if business_profile else ""
         prompt_text = f"""
 You are a helpful AI assistant. Personalize your response for the following user:
 Name: {user_name if user_name else 'Unknown'}
 Email: {user_email if user_email else 'Unknown'}
+{profile_block}
 Session ID: {session_id if session_id else 'No session'}
 Chat history:
 {history_str}
@@ -398,3 +406,46 @@ def _get_session_messages(session_id: str, limit: Optional[int] = None) -> Optio
     if limit and limit > 0:
         return msgs[-limit:]
     return msgs
+
+
+def _get_business_info(user_email: Optional[str], user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    try:
+        # Prefer lookup by ObjectId if possible
+        if user_id:
+            try:
+                oid = ObjectId(user_id)
+                doc = reg_collection.find_one({"_id": oid})
+                if doc:
+                    return doc
+            except Exception:
+                pass
+
+        # Fallback to email lookup
+        if user_email:
+            doc = reg_collection.find_one({"contact_info_email": user_email})
+            if doc:
+                return doc
+    except Exception as e:
+        print("[FastAPI] Business info lookup failed:", str(e))
+    return None
+
+
+def _format_business_profile(doc: Dict[str, Any]) -> str:
+    keys = [
+        ("Full Name", "contact_info_fullname"),
+        ("Email", "contact_info_email"),
+        ("Business Name", "contact_info_bizname"),
+        ("City/State", "contact_info_city_state"),
+        ("Ownership", "ownership"),
+        ("Role", "role"),
+        ("Business Age", "biz_age"),
+        ("Revenue", "revenue"),
+        ("Goals", "goals"),
+        ("Social Media Use", "socialmedia_use"),
+    ]
+    lines: List[str] = []
+    for label, field in keys:
+        val = doc.get(field)
+        if val is not None and str(val).strip() != "":
+            lines.append(f"- {label}: {val}")
+    return "\n".join(lines)
